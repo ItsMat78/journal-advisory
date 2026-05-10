@@ -5,12 +5,13 @@ What this script does:
   1. Asks for the Obsidian vault path and saves it to config.json
   2. Installs required Python packages (pip install -r requirements.txt)
   3. Performs an initial full index of the vault
-  4. Registers a Windows Task Scheduler job that starts watcher.py on login
+  4. Registers watcher.py to start on login (Task Scheduler, with Startup folder fallback)
 
 Run:
     python setup.py
 """
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -226,11 +227,50 @@ def _find_pythonw() -> Path:
     return pythonw_exe if pythonw_exe.exists() else python_exe
 
 
+def _register_via_startup_folder(pythonw: Path, watcher: Path) -> bool:
+    """Create a silent .vbs launcher in the user Startup folder."""
+    try:
+        startup = (
+            Path(os.environ["APPDATA"])
+            / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+        )
+        startup.mkdir(parents=True, exist_ok=True)
+        vbs_path = startup / "JournalRAG-Watcher.vbs"
+        vbs_content = (
+            'Set WshShell = CreateObject("WScript.Shell")\n'
+            f'WshShell.Run """{pythonw}"" ""{watcher}""", 0, False\n'
+        )
+        vbs_path.write_text(vbs_content, encoding="utf-8")
+        _ok(f"Startup entry created: {vbs_path}")
+        _info("The watcher will start silently on every login.")
+        return True
+    except Exception as exc:
+        _err(f"Could not create startup entry: {exc}")
+        _info(f"Start the watcher manually: python \"{watcher}\"")
+        return False
+
+
+def _start_watcher_now(pythonw: Path, watcher: Path) -> None:
+    """Launch watcher.py immediately as a detached background process."""
+    try:
+        DETACHED        = 0x00000008
+        CREATE_NO_WINDOW = 0x08000000
+        subprocess.Popen(
+            [str(pythonw), str(watcher)],
+            creationflags=DETACHED | CREATE_NO_WINDOW,
+            close_fds=True,
+        )
+        _ok("Watcher started in the background.")
+    except Exception as exc:
+        _err(f"Could not start watcher: {exc}")
+        _info(f"Start it manually: python \"{watcher}\"")
+
+
 def register_watcher_task() -> None:
-    _banner("Step 4 — Register background watcher (Windows Task Scheduler)")
+    _banner("Step 4 — Register background watcher")
     print(
-        "  This registers a Task Scheduler job that starts watcher.py\n"
-        "  silently whenever you log in to Windows.\n"
+        "  This registers watcher.py to start silently on every login.\n"
+        "  Tries Task Scheduler first; falls back to the Startup folder.\n"
     )
 
     if not _confirm("  Register watcher task?", default=True):
@@ -242,17 +282,16 @@ def register_watcher_task() -> None:
     task_name = "JournalRAG-Watcher"
     task_cmd  = f'"{pythonw}" "{watcher}"'
 
-    # Build the schtasks command
     schtasks_args = [
         "schtasks", "/create",
         "/tn", task_name,
         "/tr", task_cmd,
         "/sc", "onlogon",
-        "/rl", "limited",   # run with standard user privileges
-        "/f",               # force overwrite if exists
+        "/rl", "limited",
+        "/f",
     ]
 
-    _info(f"Registering task '{task_name}' …")
+    _info(f"Trying Task Scheduler (task: '{task_name}') …")
     result = subprocess.run(schtasks_args, capture_output=True, text=True)
 
     if result.returncode == 0:
@@ -260,8 +299,6 @@ def register_watcher_task() -> None:
         _info(f"Interpreter : {pythonw}")
         _info(f"Script      : {watcher}")
         _info(f"Trigger     : On logon")
-
-        # Start the task right now without waiting for a logon
         if _confirm("  Start the watcher right now?", default=True):
             start_result = subprocess.run(
                 ["schtasks", "/run", "/tn", task_name],
@@ -272,12 +309,11 @@ def register_watcher_task() -> None:
             else:
                 _err(f"Could not start task: {start_result.stderr.strip()}")
     else:
-        _err(f"schtasks failed:\n{result.stderr.strip()}")
-        _info(
-            "You can start the watcher manually by running:\n"
-            f"    python \"{watcher}\"\n"
-            "  (or add it to your startup folder)"
-        )
+        _warn("Task Scheduler registration failed (likely needs admin rights).")
+        _info("Falling back to Startup folder …")
+        registered = _register_via_startup_folder(pythonw, watcher)
+        if registered and _confirm("  Start the watcher right now?", default=True):
+            _start_watcher_now(pythonw, watcher)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
