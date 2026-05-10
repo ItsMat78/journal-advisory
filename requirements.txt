@@ -1,0 +1,23 @@
+# journal-rag dependencies
+# Tested on Python 3.11–3.13, Windows 11
+
+# Terminal formatting — colors, panels, spinners, live tables
+rich>=13.0
+
+# Local semantic embeddings (downloads all-MiniLM-L6-v2 on first use, ~90 MB)
+sentence-transformers>=3.0.1
+
+# Local vector store — no server required, data stored in ./db/
+# 0.5.x and 1.x both work; let pip resolve the best available version
+chromadb>=0.5.3
+
+# Filesystem event monitoring for watcher.py
+watchdog>=4.0.1
+
+# YAML frontmatter parsing for Obsidian markdown files
+python-frontmatter>=1.1.0
+
+# torch is a transitive dep of sentence-transformers.
+# setup.py installs the CPU-only wheel first (via --index-url) to avoid the
+# 2+ GB GPU build. If installing manually, run this first:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu

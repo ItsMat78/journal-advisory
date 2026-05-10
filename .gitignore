@@ -1,0 +1,41 @@
+# Vector store (local ChromaDB data)
+db/
+
+# Temp prompt files
+tmp/
+
+# Runtime config (contains local vault path)
+config.json
+
+# Logs
+*.log
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# extras
+sessions/
+Mat's Vault/
+
+# Generated launcher (contains absolute local paths)
+journal.bat
+
+# Claude Code project settings
+.claude/
+
+# Reference images from development
+*.png
