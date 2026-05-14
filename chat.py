@@ -315,6 +315,8 @@ def _print_welcome(
     t.append("   /instruct     ", style="bold cyan")
     t.append("set response directive  ", style="dim")
     t.append("/instruct alone to clear\n", style="dim italic")
+    t.append("   /refresh      ", style="bold cyan")
+    t.append("re-index changed vault files now\n", style="dim")
     t.append("   exit          ", style="bold cyan")
     t.append("save session and quit\n", style="dim")
     t.append("\n")
@@ -345,7 +347,7 @@ def _statusline(
         parts.append(f'[dim cyan]"{s}"[/dim cyan]')
 
     settings = "  ·  ".join(parts)
-    commands  = "[dim]/multi  /latest  /top-k  /instruct  exit[/dim]"
+    commands  = "[dim]/multi  /latest  /top-k  /instruct  /refresh  exit[/dim]"
     console.rule(f"{settings}    {commands}", style="bright_black")
 
 
@@ -467,6 +469,16 @@ def main(cli_args: list[str]) -> None:
             else:
                 instruct = None
                 console.print("\n  [muted]Instruction cleared.[/muted]\n")
+            continue
+
+        # ── /refresh command ───────────────────────────────────────────────
+        if question.lower() == "/refresh":
+            console.print()
+            console.print("  [info]Re-indexing vault (changed files only) …[/info]")
+            console.print()
+            from indexer import index_vault
+            index_vault()
+            console.print()
             continue
 
         # ── /latest command ────────────────────────────────────────────────

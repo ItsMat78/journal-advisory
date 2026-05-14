@@ -138,7 +138,7 @@ def configure_vault() -> Path:
     config_file = BASE_DIR / "config.json"
     cfg = {}
     if config_file.exists():
-        with open(config_file, "r", encoding="utf-8") as f:
+        with open(config_file, "r", encoding="utf-8-sig") as f:
             cfg = json.load(f)
     cfg["vault_path"] = str(vault_path)
     with open(config_file, "w", encoding="utf-8") as f:

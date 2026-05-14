@@ -95,7 +95,7 @@ def _print_help() -> None:
     console.print()
     console.print('  [muted]Every turn retrieves fresh context. Full history is carried forward.[/muted]')
     console.print('  [muted]Sessions are saved as Markdown in ./sessions/.[/muted]')
-    console.print('  [muted]In-session: /latest [N]  ·  /instruct [text]  ·  exit[/muted]')
+    console.print('  [muted]In-session: /latest [N]  ·  /instruct [text]  ·  /refresh  ·  exit[/muted]')
 
     _section("MULTI-AGENT MODE", "therapist + advisor + critic → synthesis")
     console.print()
