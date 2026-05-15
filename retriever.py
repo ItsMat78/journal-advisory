@@ -219,11 +219,17 @@ def retrieve(
     return _retriever.query(question, top_k=top_k, since=since)
 
 
-def retrieve_latest(n_entries: int = 1) -> list[RetrievedChunk]:
+def retrieve_latest(
+    n_entries: int = 1,
+    history_top_k: int = TOP_K,
+) -> list[RetrievedChunk]:
     """
-    Return ALL chunks from the N most recently dated source files, ordered
-    chronologically. Every chunk of every requested entry is included — no
-    truncation — so Claude sees the complete text of those entries.
+    Return ALL chunks from the N most recently dated source files (complete,
+    in reading order) followed by TOP_K semantically relevant chunks from
+    older entries. The historical context is derived by querying the vault
+    with the text of the latest entries as the search signal, so it reflects
+    the same themes and dynamics — giving Claude full current entries plus
+    the history needed to identify patterns and advise well.
     """
     _retriever._ensure_loaded()
 
@@ -247,7 +253,8 @@ def retrieve_latest(n_entries: int = 1) -> list[RetrievedChunk]:
         )[:n_entries]
     }
 
-    chunks: list[RetrievedChunk] = [
+    # All chunks from the latest N entries, in reading order
+    latest_chunks: list[RetrievedChunk] = [
         RetrievedChunk(
             text         = doc,
             source       = meta.get("source", "unknown"),
@@ -262,9 +269,18 @@ def retrieve_latest(n_entries: int = 1) -> list[RetrievedChunk]:
         )
         if meta.get("source") in top_sources
     ]
+    latest_chunks.sort(key=lambda c: (c.date, c.source, c.chunk_index))
 
-    chunks.sort(key=lambda c: (c.date, c.source, c.chunk_index))
-    return chunks
+    # Build a query from the latest entries' text to anchor the history search
+    combined_text = " ".join(c.text for c in latest_chunks)
+    query_words   = combined_text.split()
+    query         = " ".join(query_words[:300])  # ~300 words is enough for embedding
+
+    # Retrieve historically relevant chunks, excluding sources already covered
+    history = _retriever.query(query, top_k=history_top_k, since=None)
+    history_chunks = [c for c in history if c.source not in top_sources]
+
+    return latest_chunks + history_chunks
 
 
 # ─────────────────────────────────────────────────────────────────────────────
