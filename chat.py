@@ -109,6 +109,22 @@ def _count_turns(path: Path) -> int:
     return len(re.findall(r"\n## Turn \d+", path.read_text(encoding="utf-8")))
 
 
+def _prompt_rename(path: Path) -> Path:
+    """Ask the user for an optional name suffix and rename the session file."""
+    try:
+        name = console.input("\n  [dim]Name this session (Enter to skip):[/dim] ").strip()
+    except (EOFError, KeyboardInterrupt):
+        name = ""
+    if not name:
+        return path
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", name).strip("-").lower()
+    if not slug:
+        return path
+    new_path = path.with_name(f"{path.stem}_{slug}.md")
+    path.rename(new_path)
+    return new_path
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Session selection
 # ─────────────────────────────────────────────────────────────────────────────
@@ -431,13 +447,15 @@ def main(cli_args: list[str]) -> None:
                 question     = console.input("[bold cyan]>[/bold cyan] ").strip()
                 _from_input  = True
             except (KeyboardInterrupt, EOFError):
-                console.print(f"\n  [muted]Session saved → {session_path}[/muted]")
+                session_path = _prompt_rename(session_path)
+                console.print(f"\n  [muted]Session saved → {session_path.name}[/muted]")
                 break
 
         if not question:
             continue
         if question.lower() in ("exit", "quit", "/exit"):
-            console.print(f"\n  [muted]Session saved → {session_path}[/muted]")
+            session_path = _prompt_rename(session_path)
+            console.print(f"\n  [muted]Session saved → {session_path.name}[/muted]")
             break
 
         # ── /top-k command ────────────────────────────────────────────────
