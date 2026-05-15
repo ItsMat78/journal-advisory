@@ -219,17 +219,11 @@ def retrieve(
     return _retriever.query(question, top_k=top_k, since=since)
 
 
-def retrieve_latest(
-    n_entries: int = 1,
-    min_chunks: int = TOP_K,
-    max_auto_entries: int = 10,
-) -> list[RetrievedChunk]:
+def retrieve_latest(n_entries: int = 1) -> list[RetrievedChunk]:
     """
-    Return all chunks from the N most recently dated source files, ordered
-    chronologically. Always auto-expands beyond n_entries (treating it as a
-    floor) until at least min_chunks (defaults to TOP_K) chunks are gathered
-    or max_auto_entries is hit — so Claude always receives a full context
-    window regardless of how short individual entries are.
+    Return ALL chunks from the N most recently dated source files, ordered
+    chronologically. Every chunk of every requested entry is included — no
+    truncation — so Claude sees the complete text of those entries.
     """
     _retriever._ensure_loaded()
 
@@ -246,43 +240,28 @@ def retrieve_latest(
             if src not in latest_date_per_source or d > latest_date_per_source[src]:
                 latest_date_per_source[src] = d
 
-    # All source files sorted newest-first
-    sorted_sources = [
+    # Pick the N most recent source files
+    top_sources = {
         src for src, _ in sorted(
             latest_date_per_source.items(), key=lambda x: x[1], reverse=True
+        )[:n_entries]
+    }
+
+    chunks: list[RetrievedChunk] = [
+        RetrievedChunk(
+            text         = doc,
+            source       = meta.get("source", "unknown"),
+            date         = meta.get("date", "unknown"),
+            file_type    = meta.get("file_type", "note"),
+            chunk_index  = int(meta.get("chunk_index", 0)),
+            distance     = 0.0,
+            hybrid_score = 1.0,
         )
+        for _, doc, meta in zip(
+            all_data["ids"], all_data["documents"], all_data["metadatas"]
+        )
+        if meta.get("source") in top_sources
     ]
-
-    if not sorted_sources:
-        return []
-
-    effective_n = n_entries
-
-    while True:
-        top_sources = set(sorted_sources[:effective_n])
-        chunks: list[RetrievedChunk] = [
-            RetrievedChunk(
-                text         = doc,
-                source       = meta.get("source", "unknown"),
-                date         = meta.get("date", "unknown"),
-                file_type    = meta.get("file_type", "note"),
-                chunk_index  = int(meta.get("chunk_index", 0)),
-                distance     = 0.0,
-                hybrid_score = 1.0,
-            )
-            for _, doc, meta in zip(
-                all_data["ids"], all_data["documents"], all_data["metadatas"]
-            )
-            if meta.get("source") in top_sources
-        ]
-
-        # Always expand until min_chunks is met; n_entries is a minimum entry floor
-        if (
-            len(chunks) >= min_chunks
-            or effective_n >= min(len(sorted_sources), max(n_entries, max_auto_entries))
-        ):
-            break
-        effective_n += 1
 
     chunks.sort(key=lambda c: (c.date, c.source, c.chunk_index))
     return chunks
