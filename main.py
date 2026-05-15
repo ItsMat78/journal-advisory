@@ -227,8 +227,11 @@ def main() -> None:
 
     # ── Retrieve relevant chunks ───────────────────────────────────────────
     if latest_n is not None:
-        n_label  = f"{latest_n} " if latest_n > 1 else ""
-        msg      = f"Fetching {n_label}most recent {'entries' if latest_n > 1 else 'entry'} …"
+        msg = (
+            f"Fetching {latest_n} most recent entries …"
+            if latest_n > 1
+            else "Fetching recent entries …"
+        )
         with console.status(f"[info]{msg}[/info]", spinner="dots"):
             chunks = retrieve_latest(n_entries=latest_n)
     else:
