@@ -138,6 +138,8 @@ class Retriever:
         question: str,
         top_k: int = TOP_K,
         since: str | None = None,
+        until: str | None = None,
+        long_term_only: bool = False,
         recency_weight: float = RECENCY_WEIGHT,
     ) -> list[RetrievedChunk]:
         """
@@ -150,6 +152,11 @@ class Retriever:
         Args:
             since: optional ISO date string (YYYY-MM-DD) — only return chunks
                    from entries on or after this date.
+            until: optional ISO date string (YYYY-MM-DD) — only return chunks
+                   from entries on or before this date.
+            long_term_only: if True, restrict search to entries older than the
+                   current calendar month plus all people notes (entries from
+                   this month are handled by short-term memory in the caller).
         """
         self._ensure_loaded()
 
@@ -161,7 +168,21 @@ class Retriever:
 
         n_candidates = max(top_k, min(top_k * RETRIEVAL_OVERSAMPLE, total_docs))
 
-        where = {"date_int": {"$gte": int(since.replace("-", ""))}} if since else None
+        if long_term_only:
+            month_start_int = int(date.today().strftime("%Y%m01"))
+            where: dict | None = {"$or": [
+                {"date_int": {"$lt": month_start_int}},
+                {"file_type": {"$eq": "people"}},
+            ]}
+        elif since or until:
+            conditions = []
+            if since:
+                conditions.append({"date_int": {"$gte": int(since.replace("-", ""))}})
+            if until:
+                conditions.append({"date_int": {"$lte": int(until.replace("-", ""))}})
+            where = {"$and": conditions} if len(conditions) > 1 else conditions[0]
+        else:
+            where = None
 
         try:
             results = self._collection.query(
@@ -214,9 +235,49 @@ def retrieve(
     question: str,
     top_k: int = TOP_K,
     since: str | None = None,
+    until: str | None = None,
+    long_term_only: bool = False,
 ) -> list[RetrievedChunk]:
     """Convenience function — uses the module-level Retriever singleton."""
-    return _retriever.query(question, top_k=top_k, since=since)
+    return _retriever.query(question, top_k=top_k, since=since, until=until, long_term_only=long_term_only)
+
+
+def retrieve_current_month() -> list[RetrievedChunk]:
+    """
+    Return all non-people chunks from the current calendar month, sorted
+    chronologically. Used as short-term memory — always present in context.
+    """
+    month_start_int = int(date.today().strftime("%Y%m01"))
+    _retriever._ensure_loaded()
+    try:
+        data = _retriever._collection.get(
+            where={"$and": [
+                {"date_int": {"$gte": month_start_int}},
+                {"file_type": {"$ne": "people"}},
+            ]},
+            include=["metadatas", "documents"],
+        )
+    except Exception as exc:
+        print(f"[retriever] retrieve_current_month failed: {exc}", file=sys.stderr)
+        return []
+
+    if not data["documents"]:
+        return []
+
+    chunks = [
+        RetrievedChunk(
+            text        = doc,
+            source      = meta.get("source", "unknown"),
+            date        = meta.get("date", "unknown"),
+            file_type   = meta.get("file_type", "note"),
+            chunk_index = int(meta.get("chunk_index", 0)),
+            distance    = 0.0,
+            hybrid_score= 1.0,
+        )
+        for doc, meta in zip(data["documents"], data["metadatas"])
+    ]
+    chunks.sort(key=lambda c: (c.date, c.source, c.chunk_index))
+    return chunks
 
 
 def retrieve_latest(

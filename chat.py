@@ -19,7 +19,7 @@ from pathlib import Path
 from agents import run_multi_agent
 from config import BASE_DIR, MODEL_DEFAULT, MODEL_DEEP, TOP_K, get_vault_path
 from prompt_builder import format_context_block
-from retriever import retrieve, retrieve_latest
+from retriever import retrieve, retrieve_current_month, retrieve_latest
 from rich.markup import escape
 from rich.text import Text
 from ui import console, warn
@@ -31,7 +31,10 @@ You are a reflective journal analysis assistant having an ongoing conversation \
 with the journal's author.
 
 How you operate:
-- Each message comes with freshly retrieved journal excerpts relevant to the question
+- You have complete visibility of all journal entries from the current calendar month \
+(loaded automatically — treat this as your working memory of recent life)
+- Each message also includes historically relevant excerpts and people notes retrieved \
+by semantic search
 - You have the full conversation history above — build on it, don't repeat yourself
 - Be analytical and direct. Name patterns plainly, even uncomfortable ones
 - Ground every observation in the actual text. Quote or paraphrase specific entries
@@ -77,14 +80,16 @@ def _init_session(path: Path, model: str, flags: str) -> None:
 
 
 def _append_turn(
-    path: Path, turn: int, question: str, chunks, response: str
+    path: Path, turn: int, question: str,
+    short_term_chunks, long_term_chunks, response: str
 ) -> None:
-    sources = sorted(set(f"`{c.source}` ({c.date})" for c in chunks))
+    lt_sources = sorted(set(f"`{c.source}` ({c.date})" for c in long_term_chunks))
     with open(path, "a", encoding="utf-8") as f:
         f.write(
             f"\n## Turn {turn}\n\n"
             f"**You:** {question}\n\n"
-            f"**Retrieved:** {', '.join(sources) or 'none'}\n\n"
+            f"**Month context:** {len(short_term_chunks)} chunks  \n"
+            f"**Retrieved:** {', '.join(lt_sources) or 'none'}\n\n"
             f"**Claude:**\n\n{response}\n\n"
             "---\n"
         )
@@ -193,11 +198,11 @@ def _pick_session(resume: str | None) -> tuple[Path, list[dict]]:
 
 def _build_prompt(
     question: str,
-    chunks,
+    short_term_chunks,
+    long_term_chunks,
     history: list[dict],
     instruct: str | None = None,
 ) -> str:
-    ctx   = format_context_block(chunks)
     parts = [_PERSONA]
 
     if history:
@@ -207,9 +212,25 @@ def _build_prompt(
         )
         parts.append(f"\n{_D}\nCONVERSATION HISTORY\n{_D}\n\n{conv}")
 
-    parts.append(
-        f"\n{_D}\nRELEVANT JOURNAL EXCERPTS (fresh for this message)\n{_D}\n\n{ctx}"
-    )
+    if short_term_chunks:
+        ctx_st = format_context_block(short_term_chunks)
+        parts.append(
+            f"\n{_D}\nCURRENT MONTH — COMPLETE JOURNAL RECORD\n"
+            f"({len(short_term_chunks)} chunks · loaded automatically · chronological order)\n"
+            f"{_D}\n\n{ctx_st}"
+        )
+
+    if long_term_chunks:
+        ctx_lt = format_context_block(long_term_chunks)
+        parts.append(
+            f"\n{_D}\nHISTORICAL & PEOPLE CONTEXT — RETRIEVED FOR THIS MESSAGE\n"
+            f"({len(long_term_chunks)} chunks · semantic search · older entries + people notes)\n"
+            f"{_D}\n\n{ctx_lt}"
+        )
+
+    if not short_term_chunks and not long_term_chunks:
+        parts.append(f"\n{_D}\nJOURNAL CONTEXT\n{_D}\n\n(No relevant entries found.)")
+
     parts.append(f"\n{_D}\nUSER\n{_D}\n\n{question}")
     if instruct:
         parts.append(f"\n{_D}\nADDITIONAL INSTRUCTIONS\n{_D}\n\n{instruct}")
@@ -275,7 +296,9 @@ def _print_welcome(
     multi: bool,
     top_k: int,
     since: str | None,
+    until: str | None,
     instruct: str | None,
+    month_chunks: int = 0,
 ) -> None:
     from rich.panel import Panel
     from rich.text import Text
@@ -313,9 +336,18 @@ def _print_welcome(
     t.append("   top-k     ", style="dim")
     t.append(f"{top_k}\n")
 
-    if since:
-        t.append("   since     ", style="dim")
-        t.append(f"{since}\n", style="cyan")
+    t.append("   this month  ", style="dim")
+    if month_chunks:
+        t.append(f"{month_chunks} chunks loaded\n", style="cyan")
+    else:
+        t.append("no entries yet\n", style="dim")
+
+    if since or until:
+        t.append("   range     ", style="dim")
+        label = since or ""
+        if until:
+            label = f"{label} → {until}" if since else f"until {until}"
+        t.append(f"{label}\n", style="cyan")
     if instruct:
         t.append("   instruct  ", style="dim")
         t.append(f"{instruct}\n", style="cyan")
@@ -324,8 +356,10 @@ def _print_welcome(
 
     t.append("   /multi        ", style="bold cyan")
     t.append("toggle multi-agent mode\n", style="dim")
-    t.append("   /latest [N]   ", style="bold cyan")
-    t.append("pull N most recent entries\n", style="dim")
+    t.append("   /latest [N] [q]", style="bold cyan")
+    t.append("pull N most recent entries, optional question\n", style="dim")
+    t.append("   /since [d] [d] ", style="bold cyan")
+    t.append("focus on date or range (YYYY-MM-DD), clear with /since\n", style="dim")
     t.append("   /top-k N      ", style="bold cyan")
     t.append("change chunks retrieved per turn\n", style="dim")
     t.append("   /instruct     ", style="bold cyan")
@@ -346,7 +380,9 @@ def _statusline(
     multi: bool,
     top_k: int,
     since: str | None,
+    until: str | None,
     instruct: str | None,
+    month_chunks: int = 0,
 ) -> None:
     parts: list[str] = []
     if multi:
@@ -355,15 +391,20 @@ def _statusline(
         parts.append("[dim]◆ single[/dim]")
     parts.append(f"[dim]{_short_model(model)}[/dim]")
     parts.append(f"[dim]k={top_k}[/dim]")
-    if since:
-        parts.append(f"[cyan]since {since}[/cyan]")
+    if month_chunks:
+        parts.append(f"[dim]month:{month_chunks}[/dim]")
+    if since or until:
+        label = since or ""
+        if until:
+            label = f"{label}→{until}" if since else f"until {until}"
+        parts.append(f"[cyan]{label}[/cyan]")
     if instruct:
         s = (instruct[:25] + "…") if len(instruct) > 25 else instruct
         s = s.replace("[", "\\[")
         parts.append(f'[dim cyan]"{s}"[/dim cyan]')
 
     settings = "  ·  ".join(parts)
-    commands  = "[dim]/multi  /latest  /top-k  /instruct  /refresh  exit[/dim]"
+    commands  = "[dim]/multi  /latest  /since  /top-k  /instruct  /refresh  exit[/dim]"
     console.rule(f"{settings}    {commands}", style="bright_black")
 
 
@@ -377,6 +418,7 @@ def main(cli_args: list[str]) -> None:
     model     = MODEL_DEFAULT
     top_k     = TOP_K
     since     = None
+    until: str | None = None
     instruct: str | None = None
     multi     = False
     resume    = None   # None=new, ""=picker, "latest"=auto, "<stem>"=specific
@@ -419,6 +461,9 @@ def main(cli_args: list[str]) -> None:
     session_path, history = _pick_session(resume)
     is_new = not history
 
+    with console.status("[info]Loading current month …[/info]", spinner="dots"):
+        current_month_chunks = retrieve_current_month()
+
     flag_parts = []
     if since:             flag_parts.append(f"--since {since}")
     if top_k != TOP_K:   flag_parts.append(f"--top-k {top_k}")
@@ -429,14 +474,15 @@ def main(cli_args: list[str]) -> None:
     if is_new:
         _init_session(session_path, model, " ".join(flag_parts))
 
-    _print_welcome(session_path, is_new, model, multi, top_k, since, instruct)
+    _print_welcome(session_path, is_new, model, multi, top_k, since, until, instruct,
+                   month_chunks=len(current_month_chunks))
 
     turn_num = len(history)
     pending  = initial_q
 
     while True:
         # ── Statusline + prompt ───────────────────────────────────────────
-        _statusline(model, multi, top_k, since, instruct)
+        _statusline(model, multi, top_k, since, until, instruct, month_chunks=len(current_month_chunks))
 
         _from_input = False
         if pending:
@@ -489,6 +535,27 @@ def main(cli_args: list[str]) -> None:
                 console.print("\n  [muted]Instruction cleared.[/muted]\n")
             continue
 
+        # ── /since command ─────────────────────────────────────────────────
+        if question.lower().startswith("/since"):
+            _ISO = r"^\d{4}-\d{2}-\d{2}$"
+            import re as _re
+            tokens = question.split()
+            dates  = [t for t in tokens[1:] if _re.match(_ISO, t)]
+            if not tokens[1:]:
+                since = None
+                until = None
+                console.print("\n  [muted]Date filter cleared. Back to normal mode.[/muted]\n")
+            elif len(dates) == 0:
+                console.print(
+                    "\n  [warn]⚠[/warn]  Usage: [cmd]/since YYYY-MM-DD [YYYY-MM-DD][/cmd]\n"
+                )
+            else:
+                since = dates[0]
+                until = dates[1] if len(dates) > 1 else None
+                label = f"{since} → {until}" if until else since
+                console.print(f"\n  [ok]✓[/ok]  Date filter → [cyan]{label}[/cyan]\n")
+            continue
+
         # ── /refresh command ───────────────────────────────────────────────
         if question.lower() == "/refresh":
             console.print()
@@ -496,19 +563,34 @@ def main(cli_args: list[str]) -> None:
             console.print()
             from indexer import index_vault
             index_vault()
+            with console.status("[info]Refreshing current month …[/info]", spinner="dots"):
+                current_month_chunks = retrieve_current_month()
+            console.print(f"  [ok]✓[/ok]  Current month: [cyan]{len(current_month_chunks)}[/cyan] chunks loaded")
             console.print()
             continue
 
         # ── /latest command ────────────────────────────────────────────────
-        use_latest  = None
-        actual_q    = question
+        use_latest        = None
+        actual_q          = question
+        latest_instruct   = None
 
         if question.lower().startswith("/latest"):
-            parts      = question.split(maxsplit=1)
-            use_latest = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 1
-            actual_q   = (
+            tokens     = question.split(maxsplit=2)
+            # /latest [N] [question...]
+            n_arg      = tokens[1] if len(tokens) > 1 else ""
+            use_latest = int(n_arg) if n_arg.isdigit() else 1
+            user_q     = tokens[2] if n_arg.isdigit() and len(tokens) > 2 else (
+                         tokens[1] if not n_arg.isdigit() and len(tokens) > 1 else ""
+            )
+            actual_q   = user_q or (
                 f"Go through {'these' if use_latest > 1 else 'this'} "
                 f"journal {'entries' if use_latest > 1 else 'entry'} and share what stands out."
+            )
+            latest_instruct = (
+                "Ground your answer in the recent entries provided above — that is the primary focus. "
+                "Historical context is background knowledge; only reference it if it directly "
+                "illuminates the user's current situation. Be concrete, present-tense, and specific. "
+                "Do not pivot to long-term pattern analysis unless the user explicitly asks."
             )
 
         # ── User input — grey background (Claude Code style) ──────────────
@@ -530,34 +612,57 @@ def main(cli_args: list[str]) -> None:
         # ── Retrieve ───────────────────────────────────────────────────────
         with console.status("[info]Retrieving …[/info]", spinner="dots"):
             if use_latest is not None:
-                chunks = retrieve_latest(n_entries=use_latest)
+                # /latest: bypass short-term, use full retrieve_latest behaviour
+                st_chunks = []
+                lt_chunks = retrieve_latest(n_entries=use_latest)
+            elif since or until:
+                # date filter: bypass short-term layer, restrict to range
+                st_chunks = []
+                lt_chunks = retrieve(actual_q, top_k=top_k, since=since, until=until)
             else:
-                chunks = retrieve(actual_q, top_k=top_k, since=since)
+                # normal turn: current month pinned + long-term RAG
+                st_chunks = current_month_chunks
+                lt_chunks = retrieve(actual_q, top_k=top_k, long_term_only=True)
 
-        if not chunks:
+        all_chunks = st_chunks + lt_chunks
+        if not all_chunks:
             warn("No relevant entries found.")
             console.print()
             continue
 
-        console.print(f"  [muted]Retrieved {len(chunks)} chunk(s).[/muted]")
+        if st_chunks and lt_chunks:
+            console.print(
+                f"  [muted]Month: {len(st_chunks)} chunks  ·  Retrieved: {len(lt_chunks)} chunk(s).[/muted]"
+            )
+        elif lt_chunks:
+            console.print(f"  [muted]Retrieved {len(lt_chunks)} chunk(s).[/muted]")
+        else:
+            console.print(f"  [muted]Month: {len(st_chunks)} chunks (no historical matches).[/muted]")
         console.print()
 
         # ── Call Claude ────────────────────────────────────────────────────
+        # Merge /latest focus instruction with any active /instruct
+        effective_instruct = instruct
+        if latest_instruct:
+            effective_instruct = (
+                f"{latest_instruct}\n\n{instruct}" if instruct else latest_instruct
+            )
+
         if multi:
             result   = run_multi_agent(
                 question        = actual_q,
-                chunks          = chunks,
+                chunks          = all_chunks,
                 model           = model,
                 synthesis_model = model,
-                instruct        = instruct,
+                instruct        = effective_instruct,
                 capture_output  = True,
             )
             response = result if isinstance(result, str) else ""
         else:
-            prompt   = _build_prompt(actual_q, chunks, history, instruct=instruct)
+            prompt   = _build_prompt(actual_q, st_chunks, lt_chunks, history, instruct=effective_instruct)
             response = _call_streaming(prompt, model)
 
         # ── Persist ────────────────────────────────────────────────────────
         turn_num += 1
         history.append({"question": actual_q, "response": response})
-        _append_turn(session_path, turn_num, actual_q, chunks, response)
+        _append_turn(session_path, turn_num, actual_q, st_chunks, lt_chunks, response)
