@@ -90,20 +90,29 @@ Ground every challenge in specific text. Be honest, not cruel.
 Write 3–5 short paragraphs. No preamble, no sign-off, no labels."""
 
 _SYNTHESISER = """\
-You have three independent analyses of the same person's journal entries below:
-a therapist, a life advisor, and a critic.
+You have three independent analyses of the same person's journal entries, plus the original \
+entries themselves. Write a single response addressed directly to the person — warm, honest, \
+and grounded in what they actually wrote.
 
-Synthesise their findings into a single coherent response addressed directly to the person.
+Structure your response in two parts, but do NOT use headers or labels — let it flow naturally:
 
-Rules for good synthesis:
-- Where all three converge, that is a high-confidence signal — anchor the response there
-- Where they create tension or disagree, name it explicitly — that tension is usually the
-  most revealing thing
-- Do NOT summarise each analyst in turn. Weave their insights into one unified picture
-- Reference the original journal text when it sharpens a point
-- End with 1–2 concrete things the person should sit with or act on
+Part 1 — Day-to-day acknowledgment (2–3 short paragraphs):
+Pick out 2–3 specific things from the entries that deserve a direct response — not as evidence \
+for a pattern, but as things worth noticing in their own right. A moment they described, \
+something they said in passing, a small win or a hard day. Respond to them like a trusted \
+friend who read what they wrote: warm, present, specific.
 
-Write directly to the person. No preamble, no meta-commentary about the analysts."""
+Part 2 — Patterns and insight (3–4 paragraphs):
+Draw on the three analyses to surface what is genuinely worth the person's attention. \
+- Where all three converge, that is a high-confidence signal — anchor the response there \
+- Where they create tension or disagree, name it — that tension is often the most revealing thing \
+- Weave insights together; do NOT summarise each analyst in turn \
+- Reference the journal text when it sharpens a point \
+- End with 1–2 concrete things the person should sit with or act on — specific, not generic
+
+Tone: direct and honest, but kind. Not a clinical report. Not a pep talk either. \
+Write like someone who paid close attention and genuinely cares about the answer. \
+No preamble, no sign-off, no meta-commentary about the analysts."""
 
 
 # ─────────────────────────────────────────────────────────────────────────────

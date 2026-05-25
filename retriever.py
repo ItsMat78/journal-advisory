@@ -133,36 +133,17 @@ class Retriever:
             client           = get_chroma_client()
             self._collection = get_collection(client)
 
-    def query(
+    def _query_with_embedding(
         self,
-        question: str,
-        top_k: int = TOP_K,
+        q_embedding: list[float],
+        top_k: int,
         since: str | None = None,
         until: str | None = None,
         long_term_only: bool = False,
         recency_weight: float = RECENCY_WEIGHT,
     ) -> list[RetrievedChunk]:
-        """
-        Embed *question* and return the *top_k* best chunks by hybrid score.
-
-        Hybrid score = (1 - recency_weight) * semantic + recency_weight * recency.
-        Oversample by RETRIEVAL_OVERSAMPLE × top_k candidates from ChromaDB,
-        rerank by hybrid score, then return the top top_k.
-
-        Args:
-            since: optional ISO date string (YYYY-MM-DD) — only return chunks
-                   from entries on or after this date.
-            until: optional ISO date string (YYYY-MM-DD) — only return chunks
-                   from entries on or before this date.
-            long_term_only: if True, restrict search to entries older than the
-                   current calendar month plus all people notes (entries from
-                   this month are handled by short-term memory in the caller).
-        """
-        self._ensure_loaded()
-
-        retrieval_query = _rewrite_query(question)
-        q_embedding     = self._model.encode(retrieval_query, show_progress_bar=False).tolist()
-        total_docs      = self._collection.count()
+        """Core retrieval using a pre-computed query embedding."""
+        total_docs = self._collection.count()
         if total_docs == 0:
             return []
 
@@ -223,6 +204,38 @@ class Retriever:
         chunks.sort(key=lambda c: c.hybrid_score, reverse=True)
         return chunks[:top_k]
 
+    def query(
+        self,
+        question: str,
+        top_k: int = TOP_K,
+        since: str | None = None,
+        until: str | None = None,
+        long_term_only: bool = False,
+        recency_weight: float = RECENCY_WEIGHT,
+    ) -> list[RetrievedChunk]:
+        """
+        Embed *question* and return the *top_k* best chunks by hybrid score.
+
+        Hybrid score = (1 - recency_weight) * semantic + recency_weight * recency.
+        Oversample by RETRIEVAL_OVERSAMPLE × top_k candidates from ChromaDB,
+        rerank by hybrid score, then return the top top_k.
+
+        Args:
+            since: optional ISO date string (YYYY-MM-DD) — only return chunks
+                   from entries on or after this date.
+            until: optional ISO date string (YYYY-MM-DD) — only return chunks
+                   from entries on or before this date.
+            long_term_only: if True, restrict search to entries older than the
+                   current calendar month plus all people notes (entries from
+                   this month are handled by short-term memory in the caller).
+        """
+        self._ensure_loaded()
+        retrieval_query = _rewrite_query(question)
+        q_embedding     = self._model.encode(retrieval_query, show_progress_bar=False).tolist()
+        return self._query_with_embedding(
+            q_embedding, top_k, since, until, long_term_only, recency_weight,
+        )
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Module-level singleton
@@ -240,6 +253,70 @@ def retrieve(
 ) -> list[RetrievedChunk]:
     """Convenience function — uses the module-level Retriever singleton."""
     return _retriever.query(question, top_k=top_k, since=since, until=until, long_term_only=long_term_only)
+
+
+def retrieve_stratified(
+    question: str,
+    top_k: int = TOP_K,
+    since: str | None = None,
+    until: str | None = None,
+) -> list[RetrievedChunk]:
+    """
+    Temporally-stratified retrieval for broad date-range queries.
+
+    Divides [since, until] into monthly buckets, retrieves top_k//N chunks
+    from each bucket using pure semantic score (no recency decay), then merges
+    and returns the top_k overall by semantic score.
+
+    This prevents the recency bias of a single flat query, which clusters on
+    recent entries when the query is broad or semantically uniform over time.
+
+    Falls back to regular retrieve() when the range spans fewer than 2 months.
+    """
+    import calendar as _calendar
+
+    _retriever._ensure_loaded()
+
+    start = date.fromisoformat(since) if since else date(2020, 1, 1)
+    end   = date.fromisoformat(until) if until else date.today()
+
+    # Build monthly [since, until] pairs covering the full range
+    buckets: list[tuple[str, str]] = []
+    y, m = start.year, start.month
+    while (y, m) <= (end.year, end.month):
+        b_start = date(y, m, 1)
+        b_end   = date(y, m, _calendar.monthrange(y, m)[1])
+        buckets.append((
+            max(b_start, start).isoformat(),
+            min(b_end,   end  ).isoformat(),
+        ))
+        m += 1
+        if m > 12:
+            m, y = 1, y + 1
+
+    if len(buckets) < 2:
+        return retrieve(question, top_k=top_k, since=since, until=until)
+
+    # Rewrite query and encode once — reused across all bucket queries
+    retrieval_query = _rewrite_query(question)
+    q_embedding     = _retriever._model.encode(retrieval_query, show_progress_bar=False).tolist()
+
+    slots_per_bucket = max(2, math.ceil(top_k / len(buckets)))
+
+    all_chunks: list[RetrievedChunk] = []
+    for b_since, b_until in buckets:
+        bucket_chunks = _retriever._query_with_embedding(
+            q_embedding,
+            top_k=slots_per_bucket,
+            since=b_since,
+            until=b_until,
+            recency_weight=0.0,  # pure semantic — all months compete equally
+        )
+        all_chunks.extend(bucket_chunks)
+
+    # Final merge: sort by pure semantic score, no recency bias across buckets
+    all_chunks.sort(key=lambda c: c.score, reverse=True)
+    return all_chunks[:top_k]
 
 
 def retrieve_current_month() -> list[RetrievedChunk]:

@@ -19,7 +19,7 @@ from pathlib import Path
 from agents import run_multi_agent
 from config import BASE_DIR, MODEL_DEFAULT, MODEL_DEEP, TOP_K, get_vault_path
 from prompt_builder import format_context_block
-from retriever import retrieve, retrieve_current_month, retrieve_latest
+from retriever import retrieve, retrieve_current_month, retrieve_latest, retrieve_stratified
 from rich.markup import escape
 from rich.text import Text
 from ui import console, warn
@@ -616,9 +616,9 @@ def main(cli_args: list[str]) -> None:
                 st_chunks = []
                 lt_chunks = retrieve_latest(n_entries=use_latest)
             elif since or until:
-                # date filter: bypass short-term layer, restrict to range
+                # date filter: stratified retrieval for multi-month ranges
                 st_chunks = []
-                lt_chunks = retrieve(actual_q, top_k=top_k, since=since, until=until)
+                lt_chunks = retrieve_stratified(actual_q, top_k=top_k, since=since, until=until)
             else:
                 # normal turn: current month pinned + long-term RAG
                 st_chunks = current_month_chunks
