@@ -88,7 +88,7 @@ Ask a question, get a response, done.
 
 ```cmd
 journal "What have I been stressed about lately?"
-journal "How has my relationship with Soumya changed over time?"
+journal "How has my relationship with Jane changed over time?"
 journal "What were my goals at the start of the year?"
 journal "When did I last feel genuinely excited about something?"
 ```
